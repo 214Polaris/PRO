@@ -70,3 +70,25 @@ conda run -n pro-h100 python scripts/verify_runtime.py
 - CUDA 不可见：
   - 先检查 `nvidia-smi`
   - 再运行 `python scripts/verify_runtime.py` 查看 torch 是否识别 GPU
+- `Disk quota exceeded`（你当前遇到的）：
+  - 原因：`miniconda3/pkgs` 缓存目录超配额
+  - 解决：把 Conda 缓存与环境目录重定向到大盘路径（如 `$SCRATCH`），并清理旧缓存
+  - 示例：
+
+```bash
+# 1) 选一个配额更大的路径（按集群实际路径修改）
+mkdir -p /scratch/$USER/conda/pkgs /scratch/$USER/conda/envs
+
+# 2) 用重定向目录重建环境（脚本已支持）
+CONDA_STORAGE_ROOT=/scratch/$USER/conda \
+CONDA_CLEAN_CACHE=1 \
+bash scripts/setup_conda_env.sh h100
+```
+
+  - 若你没有 `/scratch`，可改成项目盘路径，例如：
+
+```bash
+CONDA_STORAGE_ROOT=/home/3/ua06783/DP-PRO/.conda-store \
+CONDA_CLEAN_CACHE=1 \
+bash scripts/setup_conda_env.sh h100
+```

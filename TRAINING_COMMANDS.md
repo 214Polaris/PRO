@@ -15,6 +15,8 @@ pip install -r requirements.txt
 如果你要在服务器稳定复现，优先使用 Conda：
 - 说明文档：`CONDA_ENV.md`
 - 一键安装：`bash scripts/setup_conda_env.sh auto`
+- 若服务器报 `Disk quota exceeded`，用大盘路径重定向 Conda 存储：
+  - `CONDA_STORAGE_ROOT=/scratch/$USER/conda CONDA_CLEAN_CACHE=1 bash scripts/setup_conda_env.sh h100`
 
 ## 2. GitHub 大文件（Git LFS）
 
