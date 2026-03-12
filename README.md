@@ -67,7 +67,7 @@ cd train
 
 The scripts can be easily modified to train LLMs with different datasets. 
 For a consolidated command reference (HH / Summarize / ListUltraFeedback / custom datasets), see [TRAINING_COMMANDS.md](./TRAINING_COMMANDS.md).
-For 4x H100 servers, use the default settings in `train/*.sh` (4 processes + `ds_config_h100x4.yaml`).
+For 4x H100/Blackwell servers, use the default settings in `train/*.sh` (4 processes + auto GPU-specific DeepSpeed config).
 For GitHub pushing with large artifacts (checkpoints/data), this repo is configured with Git LFS via `.gitattributes`.
 
 ### Test

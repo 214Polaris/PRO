@@ -38,12 +38,14 @@ git lfs install
 git lfs migrate import --include="*.pt,*.pth,*.bin,*.safetensors,*.ckpt,*.onnx,*.gguf,*.parquet,*.arrow,*.npy,*.npz,*.h5,*.hdf5,*.pkl,*.pickle,*.zip,*.7z,*.tar,*.tar.gz,*.tgz,*.mp4,*.mov,*.mkv,*.webm,*.wav,data/**/*.json,checkpoints/**,transformers_cache/**"
 ```
 
-## 3. 4xH100 推荐配置（高吞吐）
+## 3. 4xH100 / Blackwell 推荐配置（高吞吐）
 
-当前 `train/*.sh` 已默认按 4 卡优化：
+当前 `train/*.sh` 已默认按 4 卡优化，并会自动识别 Blackwell：
 - `GPU_IDS=0,1,2,3`
 - `NUM_PROCESSES=4`
-- `ACCELERATE_CONFIG_FILE=ds_config_h100x4.yaml`
+- `ACCELERATE_CONFIG_FILE` 默认自动选择：
+  - Blackwell: `ds_config_blackwellx4.yaml`
+  - H100/H200/A100: `ds_config_h100x4.yaml`
 - `PER_DEVICE_TRAIN_BATCH_SIZE=4`
 - `PER_DEVICE_EVAL_BATCH_SIZE=32`
 - `CHECKPOINTING_STEP=2000`（减少中途验证造成的 GPU 空转）

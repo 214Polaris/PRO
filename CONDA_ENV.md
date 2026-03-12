@@ -4,6 +4,9 @@
 
 ## 1. 环境文件
 
+- `envs/pro-blackwell.yml`:
+  - 适合 Blackwell（B100/B200/GB200/RTX50）/ CUDA 12.4
+  - 推荐用于 Blackwell 机器
 - `envs/pro-h100.yml`:
   - 适合 H100 / CUDA 12.1 训练
   - 推荐用于你当前 4xH100 服务器
@@ -18,12 +21,13 @@ bash scripts/setup_conda_env.sh auto
 ```
 
 参数说明：
-- `auto`: 自动检测 GPU，H100 则选 `h100`，否则选 `legacy`
+- `auto`: 自动检测 GPU，Blackwell 选 `blackwell`，H100/H200/A100 选 `h100`，其它选 `legacy`
 - 也可显式指定：
+  - `bash scripts/setup_conda_env.sh blackwell`
   - `bash scripts/setup_conda_env.sh h100`
   - `bash scripts/setup_conda_env.sh legacy`
 - 自定义环境名：
-  - `bash scripts/setup_conda_env.sh h100 pro-train`
+  - `bash scripts/setup_conda_env.sh blackwell pro-train`
 
 安装结束会自动运行：
 - `scripts/verify_runtime.py`
@@ -31,8 +35,8 @@ bash scripts/setup_conda_env.sh auto
 ## 3. 手动安装（可选）
 
 ```bash
-conda env create -f envs/pro-h100.yml -n pro-h100
-conda activate pro-h100
+conda env create -f envs/pro-blackwell.yml -n pro-blackwell
+conda activate pro-blackwell
 python scripts/verify_runtime.py
 ```
 
@@ -43,7 +47,7 @@ python scripts/verify_runtime.py
 把仓库同步到服务器后：
 
 ```bash
-bash scripts/setup_conda_env.sh h100
+bash scripts/setup_conda_env.sh blackwell
 ```
 
 ### 方案 B：导出锁定环境再重建
@@ -92,3 +96,5 @@ CONDA_STORAGE_ROOT=/home/3/ua06783/DP-PRO/.conda-store \
 CONDA_CLEAN_CACHE=1 \
 bash scripts/setup_conda_env.sh h100
 ```
+
+  - 补充：若 `DP-PRO` 路径与 `$HOME` 同一配额池，仍会失败。需要换到真正独立的大盘（如 `/scratch`、`/work`、`/localscratch`、`$TMPDIR`）。

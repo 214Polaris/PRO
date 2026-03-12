@@ -5,6 +5,7 @@ import os
 from collections import Counter
 
 from datasets import concatenate_datasets, load_dataset
+from huggingface_hub import HfApi
 from tqdm import tqdm
 
 
@@ -68,21 +69,39 @@ def _format_prefix(prompt):
 
 
 def _build_pro_sample(raw_sample, source_split, dataset_name, ranking_len):
-    if "prompt" not in raw_sample:
+    prompt = (
+        raw_sample.get("prompt")
+        or raw_sample.get("instruction")
+        or raw_sample.get("query")
+        or raw_sample.get("input")
+    )
+    if prompt is None:
         return None, "missing_prompt"
-    if "completions" not in raw_sample:
+    completions = (
+        raw_sample.get("completions")
+        or raw_sample.get("all_responses")
+        or raw_sample.get("responses")
+    )
+    if completions is None:
         return None, "missing_completions"
-    if "overall_scores" not in raw_sample:
+    overall_scores = (
+        raw_sample.get("overall_scores")
+        or raw_sample.get("scores")
+        or raw_sample.get("reward")
+    )
+    if overall_scores is None:
         return None, "missing_scores"
-
-    prompt = raw_sample["prompt"]
-    completions = raw_sample["completions"]
-    overall_scores = raw_sample["overall_scores"]
     if not isinstance(completions, list) or not isinstance(overall_scores, list):
         return None, "invalid_list_fields"
 
     scored_candidates = []
     for index, (completion, score) in enumerate(zip(completions, overall_scores)):
+        if isinstance(completion, dict):
+            completion = (
+                completion.get("text")
+                or completion.get("response")
+                or completion.get("completion")
+            )
         if not isinstance(completion, str):
             continue
         completion = completion.strip()
@@ -107,13 +126,65 @@ def _build_pro_sample(raw_sample, source_split, dataset_name, ranking_len):
         "meta": {
             "dataset": dataset_name,
             "source_split": source_split,
-            "source_id": raw_sample.get("id", None),
+            "source_id": raw_sample.get("id", raw_sample.get("prompt_id", None)),
         },
         "prefix": [prefix for _ in range(ranking_len)],
         "suffix": [candidate[2] for candidate in scored_candidates],
         "reward": [candidate[1] for candidate in scored_candidates],
         "sft_index": 0,
     }, None
+
+
+def _guess_split_from_path(file_path):
+    lowered = file_path.lower()
+    parts = lowered.replace("\\", "/").split("/")
+    split_aliases = {
+        "train": "train",
+        "training": "train",
+        "dev": "dev",
+        "valid": "dev",
+        "validation": "dev",
+        "test": "test",
+    }
+    for p in parts:
+        if p in split_aliases:
+            return split_aliases[p]
+
+    file_name = parts[-1]
+    for src, dst in split_aliases.items():
+        if file_name.startswith(src + "-") or ("-" + src + "-") in file_name:
+            return dst
+        if file_name.startswith(src + "_") or ("_" + src + "_") in file_name:
+            return dst
+
+    return "train"
+
+
+def _load_dataset_with_parquet_fallback(dataset_name):
+    """
+    Some dataset repos expose metadata that can fail to parse on certain
+    `datasets` versions. Fallback to reading Parquet files directly.
+    """
+    print("Falling back to direct parquet loading for:", dataset_name)
+    api = HfApi()
+    repo_files = api.list_repo_files(repo_id=dataset_name, repo_type="dataset")
+    parquet_files = [f for f in repo_files if f.endswith(".parquet")]
+    if len(parquet_files) == 0:
+        raise RuntimeError(
+            "No parquet files found in dataset repo {}.".format(dataset_name)
+        )
+
+    data_files = {}
+    for file_path in parquet_files:
+        split_name = _guess_split_from_path(file_path)
+        data_files.setdefault(split_name, []).append(
+            "https://huggingface.co/datasets/{}/resolve/main/{}".format(
+                dataset_name, file_path
+            )
+        )
+
+    print("Parquet splits found:", {k: len(v) for k, v in data_files.items()})
+    return load_dataset("parquet", data_files=data_files)
 
 
 def _split_dataset(dataset_dict, args):
@@ -219,7 +290,11 @@ def main():
     assert args.ranking_len >= 2, "ranking_len should be at least 2 for PRO training."
 
     print("Loading dataset:", args.dataset_name)
-    dataset_dict = load_dataset(args.dataset_name, args.dataset_config)
+    try:
+        dataset_dict = load_dataset(args.dataset_name, args.dataset_config)
+    except Exception as e:
+        print("Standard load_dataset failed with error:", repr(e))
+        dataset_dict = _load_dataset_with_parquet_fallback(args.dataset_name)
     train_set, dev_set, test_set = _split_dataset(dataset_dict, args)
     print("Split sizes - train/dev/test:", len(train_set), len(dev_set), len(test_set))
 

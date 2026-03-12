@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # Usage:
-#   bash scripts/setup_conda_env.sh [auto|h100|legacy] [env_name]
+#   bash scripts/setup_conda_env.sh [auto|blackwell|h100|legacy] [env_name]
 # Examples:
 #   bash scripts/setup_conda_env.sh auto
 #   bash scripts/setup_conda_env.sh h100 pro-h100
+#   bash scripts/setup_conda_env.sh blackwell pro-blackwell
 
 MODE="${1:-auto}"
 ENV_NAME="${2:-}"
@@ -21,7 +22,12 @@ detect_mode() {
         return
     fi
 
-    if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qi "H100"; then
+    local gpu_names
+    gpu_names="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || true)"
+
+    if echo "$gpu_names" | grep -Eiq "B100|B200|GB200|BLACKWELL|RTX 50|RTX50"; then
+        echo "blackwell"
+    elif echo "$gpu_names" | grep -Eiq "H100|H200|A100"; then
         echo "h100"
     else
         echo "legacy"
@@ -32,8 +38,8 @@ if [[ "$MODE" == "auto" ]]; then
     MODE="$(detect_mode)"
 fi
 
-if [[ "$MODE" != "h100" && "$MODE" != "legacy" ]]; then
-    echo "[ERROR] MODE must be one of: auto, h100, legacy"
+if [[ "$MODE" != "blackwell" && "$MODE" != "h100" && "$MODE" != "legacy" ]]; then
+    echo "[ERROR] MODE must be one of: auto, blackwell, h100, legacy"
     exit 1
 fi
 
@@ -84,6 +90,13 @@ fi
 if [[ -n "$ENVS_PATH" ]]; then
     CONDA_ENV_VARS+=("CONDA_ENVS_PATH=$ENVS_PATH")
 fi
+# Reduce pip cache pressure on quota-limited systems.
+if [[ -z "${PIP_NO_CACHE_DIR:-}" ]]; then
+    CONDA_ENV_VARS+=("PIP_NO_CACHE_DIR=1")
+fi
+if [[ -n "${PIP_CACHE_DIR:-}" ]]; then
+    CONDA_ENV_VARS+=("PIP_CACHE_DIR=${PIP_CACHE_DIR}")
+fi
 
 conda_cmd() {
     env "${CONDA_ENV_VARS[@]}" conda "$@"
@@ -114,6 +127,11 @@ conda_run_in_env git lfs install --skip-repo || true
 
 echo "[INFO] verifying runtime"
 conda_run_in_env python "${ROOT_DIR}/scripts/verify_runtime.py"
+
+if [[ "${CONDA_CLEAN_AFTER:-1}" == "1" ]]; then
+    echo "[INFO] cleaning conda cache after install (CONDA_CLEAN_AFTER=1)"
+    conda_cmd clean -a -y || true
+fi
 
 echo "[OK] conda env is ready: $ENV_NAME"
 echo "[NEXT] activate with: conda activate $ENV_NAME"
