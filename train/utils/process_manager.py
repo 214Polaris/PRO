@@ -7,7 +7,7 @@ from tqdm import tqdm
 import numpy as np
 import torch
 from accelerate.logging import get_logger
-from .data_manager import HH_DataManager, Summarize_DataManager
+from .data_manager import HH_DataManager, Summarize_DataManager, UltraFeedback_DataManager
 from torch.utils.tensorboard import SummaryWriter
 import torch.nn.functional as F
 from transformers import (
@@ -18,7 +18,7 @@ from transformers import (
 )
 if args.task == "hh":
     from utils.metrics_hh import create_reward_fn
-elif args.task == "summarize":
+elif args.task == "summarize" or args.task == "ultrafeedback":
     from utils.metrics_summarize import create_reward_fn
 else:
     raise ValueError("Invalid task name!")
@@ -43,6 +43,11 @@ class ProcessManager():
             )
         elif args.task == "summarize":
             self.data_manager = Summarize_DataManager(
+                self.model_config,
+                args.training_stage_num,
+            )
+        elif args.task == "ultrafeedback":
+            self.data_manager = UltraFeedback_DataManager(
                 self.model_config,
                 args.training_stage_num,
             )
@@ -113,7 +118,10 @@ class ProcessManager():
     def prepare_hfa_dataloader(self, train_file_path=args.train_file_path, train_file_name = None):
         # get dataloader
         if train_file_name == None:
-            train_file_name = os.listdir(train_file_path)[0]
+            train_files = sorted([f for f in os.listdir(train_file_path) if f.endswith(".json")])
+            if len(train_files) == 0:
+                raise ValueError("No json training files found in {}.".format(train_file_path))
+            train_file_name = train_files[0]
         
         self.logger.info(f"Load training data from {os.path.join(train_file_path, train_file_name)}")
         self.accelerator.print(f"Load training data from {os.path.join(train_file_path, train_file_name)}")
@@ -133,7 +141,9 @@ class ProcessManager():
 
     def init_prepare_train(self, train_file_name = None):
         # get dataloader
-        train_files = os.listdir(args.train_file_path)
+        train_files = sorted([f for f in os.listdir(args.train_file_path) if f.endswith(".json")])
+        if len(train_files) == 0:
+            raise ValueError("No json training files found in {}.".format(args.train_file_path))
         
         if train_file_name == None:
             train_file_name = train_files[0]
@@ -177,39 +187,69 @@ class ProcessManager():
         
         return model, optimizer, dataset_length
 
+    def evaluate_split_reward(
+        self,
+        model,
+        infer_file_path,
+        infer_file_name,
+        get_score,
+        reward_batch_size,
+        split_name,
+        step_label=None,
+    ):
+        infer_res = self.infer(
+            model=model,
+            infer_file_path=infer_file_path,
+            infer_file_name=infer_file_name,
+        )
+        if len(infer_res) == 0:
+            self.logger.warning(f"{split_name} set is empty, skip reward evaluation.")
+            return float("nan")
+
+        prefixes, suffixes = [], []
+        reward_sum = 0.0
+        for index, sample in enumerate(infer_res):
+            prefixes.append(sample["prefix"][0])
+            suffixes.append(sample["infer"]["t"].strip())
+            if len(prefixes) == reward_batch_size or index == len(infer_res) - 1:
+                batch_rewards = torch.sigmoid(get_score(prefixes, suffixes)).cpu().detach().numpy().tolist()
+                reward_sum += sum(batch_rewards)
+                prefixes, suffixes = [], []
+
+        avg_reward = reward_sum / len(infer_res)
+        if step_label is not None:
+            self.logger.info(f"{step_label} | {split_name} avg reward {avg_reward}")
+        else:
+            self.logger.info(f"{split_name} avg reward {avg_reward}")
+        return avg_reward
+
     def train(self):
-        train_files = os.listdir(args.train_file_path)
+        train_files = sorted([f for f in os.listdir(args.train_file_path) if f.endswith(".json")])
+        if len(train_files) == 0:
+            raise ValueError("No json training files found in {}.".format(args.train_file_path))
         model, optimizer, dataset_length = self.init_prepare_train(
             train_file_name = train_files[0]
         )
         training_stage = args.training_stage_num
+        should_do_reward_eval = args.do_validation or (
+            args.test_file_path is not None and args.test_file_name is not None
+        )
         if self.accelerator.is_main_process:
-            if args.do_validation:
+            if should_do_reward_eval:
                 get_score, reward_batch_size = create_reward_fn()
             writer = SummaryWriter(args.log_path)
         
             if args.do_validation:
                 model_to_save = self.accelerator.unwrap_model(model)
-                dev_res = self.infer(
+                dev_reward = self.evaluate_split_reward(
                     model = model_to_save,
                     infer_file_path = args.validation_file_path,
                     infer_file_name = args.validation_file_name,
+                    get_score=get_score,
+                    reward_batch_size=reward_batch_size,
+                    split_name="Dev",
+                    step_label="Step 0",
                 )
-                
-                prefixes, suffixes = [], []
-                batch_size = reward_batch_size
-                dev_reward = 0
-                for index, sample in enumerate(dev_res):
-                    prefix = sample['prefix'][0]
-                    suffix = sample['infer']["t"].strip()
-                    prefixes.append(prefix)
-                    suffixes.append(suffix)
-                    if len(prefixes) == batch_size or index == len(dev_res)-1:
-                        batch_rewards = torch.sigmoid(get_score(prefixes, suffixes)).cpu().detach().numpy().tolist() #[batch_size]
-                        dev_reward += sum(batch_rewards)
-                        prefixes, suffixes = [], []
-                dev_reward = dev_reward / len(dev_res)
-                self.logger.info(f"Step 0 | Dev avg reward {dev_reward}")
                 model_to_save = None
 
         self.accelerator.wait_for_everyone()
@@ -282,26 +322,15 @@ class ProcessManager():
                             
                             if args.do_validation and (completed_steps % args.checkpointing_step == 0 or (step == len(hfa_dataloader)-1 and train_file_index == len(train_files)-1)):
                                 model_to_save = self.accelerator.unwrap_model(model)
-                                dev_res = self.infer(
+                                dev_reward = self.evaluate_split_reward(
                                     model = model_to_save,
                                     infer_file_path = args.validation_file_path,
                                     infer_file_name = args.validation_file_name,
+                                    get_score=get_score,
+                                    reward_batch_size=reward_batch_size,
+                                    split_name="Dev",
+                                    step_label=f"Step {completed_steps}",
                                 )
-                                
-                                prefixes, suffixes = [], []
-                                batch_size = reward_batch_size
-                                dev_reward = 0
-                                for index, sample in enumerate(dev_res):
-                                    prefix = sample['prefix'][0]
-                                    suffix = sample['infer']["t"].strip()
-                                    prefixes.append(prefix)
-                                    suffixes.append(suffix)
-                                    if len(prefixes) == batch_size or index == len(dev_res)-1:
-                                        batch_rewards = torch.sigmoid(get_score(prefixes, suffixes)).cpu().detach().numpy().tolist() #[batch_size]
-                                        dev_reward += sum(batch_rewards)
-                                        prefixes, suffixes = [], []
-                                dev_reward = dev_reward / len(dev_res)
-                                self.logger.info(f"Step {completed_steps} | Dev avg reward {dev_reward}")
                                 if dev_reward > last_dev_reward:
                                     best_step = completed_steps
                                     self.logger.info(f"Step {completed_steps} checkpoint with higher Dev avg reward (the best checkpoint so far)")
@@ -319,9 +348,30 @@ class ProcessManager():
                 self.save_checkpoint(model_to_save,self.data_manager.tokenizer,os.path.join(args.output_dir, 'epoch_{}'.format(epoch)))
                 self.logger.info(f"Epoch {epoch} checkpoint has been saved.")
                 model_to_save = None
-        if args.do_validation and self.accelerator.is_main_process:
+        if args.do_validation and self.accelerator.is_main_process and best_step != -1:
             print("The best checkpoint is step_{}".format(best_step))
-            os.symlink('step_{}'.format(best_step), os.path.join(args.output_dir, 'best_checkpoint'))
+            best_link = os.path.join(args.output_dir, 'best_checkpoint')
+            if os.path.lexists(best_link):
+                os.remove(best_link)
+            os.symlink('step_{}'.format(best_step), best_link)
+
+        if (
+            self.accelerator.is_main_process
+            and args.test_file_path is not None
+            and args.test_file_name is not None
+        ):
+            model_to_eval = self.accelerator.unwrap_model(model)
+            final_test_reward = self.evaluate_split_reward(
+                model=model_to_eval,
+                infer_file_path=args.test_file_path,
+                infer_file_name=args.test_file_name,
+                get_score=get_score,
+                reward_batch_size=reward_batch_size,
+                split_name="Test",
+                step_label="Final",
+            )
+            writer.add_scalar("stage_{}/test_avg_reward".format(training_stage), final_test_reward, completed_steps)
+
         if self.accelerator.is_main_process:
             writer.close()
         
@@ -334,18 +384,6 @@ class ProcessManager():
         with open(os.path.join(infer_file_path, infer_file_name), "r", encoding='utf-8') as f:
             infer_data = [json.loads(l) for l in f.readlines()]
 
-        # sort
-        length = []
-        for l in infer_data:
-            lens = 0
-            for p in l['prefix'][0]:
-                lens += (len(p.split(" ")))
-            length.append(lens)
-        
-        indices = list(range(len(length)))
-        back_indices = indices
-        infer_data = [infer_data[index] for index in indices]
-        
         infer_batch_size = args.per_device_eval_batch_size                                
         infer_bar = tqdm(range(len(infer_data)), desc= "Inference on {}".format(infer_file_name))
         for sample_index in range(0,len(infer_data),infer_batch_size):
@@ -358,7 +396,6 @@ class ProcessManager():
                 l['infer'] = {"t": s}
             infer_bar.update(infer_batch_size)
         torch.cuda.empty_cache()
-        infer_data = [infer_data[index] for index in back_indices]
 
         return infer_data
 

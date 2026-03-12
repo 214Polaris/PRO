@@ -23,6 +23,9 @@ Large language models (LLMs) often contain misleading content, emphasizing the n
 <div align="center"><img src="./resources/automatic_summarize.jpg" style="zoom:50%"></div>
 
 ## Running!
+### Conda Environment
+For reproducible local/server setup, see [CONDA_ENV.md](./CONDA_ENV.md).
+
 ### Data Preparation
 We provide the preprocessed data for training and testing, which can be get with following steps:
 1. Download [data.zip](https://ylab-mobile-prod.oss-cn-beijing.aliyuncs.com/yueli.ybw/data.zip) and unzip it.
@@ -63,6 +66,9 @@ cd train
 ```
 
 The scripts can be easily modified to train LLMs with different datasets. 
+For a consolidated command reference (HH / Summarize / ListUltraFeedback / custom datasets), see [TRAINING_COMMANDS.md](./TRAINING_COMMANDS.md).
+For 4x H100 servers, use the default settings in `train/*.sh` (4 processes + `ds_config_h100x4.yaml`).
+For GitHub pushing with large artifacts (checkpoints/data), this repo is configured with Git LFS via `.gitattributes`.
 
 ### Test
 The following command can be used to test the model:

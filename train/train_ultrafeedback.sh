@@ -1,14 +1,17 @@
 export OMP_NUM_THREADS=16
 root_dir=..
 
-#stage 23
 id=$1
-data_path=$2
-ranking_len=$3
-if [ -z "$id" ] || [ -z "$data_path" ] || [ -z "$ranking_len" ]; then
-    echo "Usage: $0 <exp_id> <data_path> <ranking_len>"
+ranking_len=$2
+
+if [ -z "$id" ] || [ -z "$ranking_len" ]; then
+    echo "Usage: $0 <exp_id> <ranking_len> [train_dir] [dev_dir] [test_dir]"
     exit 1
 fi
+
+train_dir=${3:-list_ultrafeedback_train_len${ranking_len}}
+dev_dir=${4:-list_ultrafeedback_dev_len${ranking_len}}
+test_dir=${5:-list_ultrafeedback_test_len${ranking_len}}
 
 gpu_ids=${GPU_IDS:-0,1,2,3}
 num_processes=${NUM_PROCESSES:-4}
@@ -21,10 +24,12 @@ dataloader_workers=${PRO_DATALOADER_WORKERS:-4}
 
 mkdir -p "$root_dir/logs/$id/$ranking_len"
 PRO_DATALOADER_WORKERS="$dataloader_workers" CUDA_VISIBLE_DEVICES="$gpu_ids" accelerate launch --num_processes "$num_processes" --config_file "$config_file" main.py \
-    --task summarize \
-    --train_file_path "$root_dir/data/${data_path}" \
-    --validation_file_path "$root_dir/data/summarize_dev" \
-    --validation_file_name sampled_dev.json \
+    --task ultrafeedback \
+    --train_file_path "$root_dir/data/${train_dir}" \
+    --validation_file_path "$root_dir/data/${dev_dir}" \
+    --validation_file_name dev.json \
+    --test_file_path "$root_dir/data/${test_dir}" \
+    --test_file_name test.json \
     --output_dir "$root_dir/checkpoints/index_$id/stage_$ranking_len" \
     --log_path "$root_dir/logs/$id/$ranking_len" \
     --index "$id" \
@@ -34,7 +39,7 @@ PRO_DATALOADER_WORKERS="$dataloader_workers" CUDA_VISIBLE_DEVICES="$gpu_ids" acc
     --num_train_epochs "$num_train_epochs" \
     --checkpointing_step "$checkpointing_step" \
     --training_stage_num "$ranking_len" \
-    --block_size 720 \
+    --block_size 1024 \
     --learning_rate 5e-6 \
     --per_device_train_batch_size "$per_device_train_batch_size" \
     --per_device_eval_batch_size "$per_device_eval_batch_size" \

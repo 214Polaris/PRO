@@ -35,6 +35,11 @@ def parse_args():
         default=42,
     )
     parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Enable deterministic mode for exact reproducibility (slower).",
+    )
+    parser.add_argument(
         "--temperature",
         type=float,
         default=1,
@@ -52,6 +57,12 @@ def parse_args():
     )
     parser.add_argument(
         "--validation_file_name", type=str, default=None,
+    )
+    parser.add_argument(
+        "--test_file_path", type=str, default=None,
+    )
+    parser.add_argument(
+        "--test_file_name", type=str, default=None,
     )
     parser.add_argument(
         "--model_name_or_path",
@@ -104,13 +115,20 @@ def parse_args():
 
     return args
 
-def setup_seed(seed):
+def setup_seed(seed, deterministic=False):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
-    torch.backends.cudnn.benchmark=False
-    torch.backends.cudnn.deterministic=True
+    # Keep TF32 on to improve throughput on Ampere/Hopper.
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    if deterministic:
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+    else:
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
 
 args = parse_args()
-setup_seed(args.seed)
+setup_seed(args.seed, args.deterministic)
